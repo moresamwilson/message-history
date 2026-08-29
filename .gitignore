@@ -1,0 +1,4 @@
+# Message data never leaves your machine — everything the pipeline reads or
+# writes lives in data/ and stays untracked.
+data/*
+!data/.gitkeep
