@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Messages per day</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  /* 16:9 stage (1920×1080 design frame) */
+  #stage {
+    position: relative;
+    width: 100vw;
+    aspect-ratio: 16 / 9;
+    background: #ffffff;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+const C = CHART_COLORS;
+// Data: one record per (person, year, day-of-year) with a message count.
+// d = ordinal day in a leap reference year (0 = 1 Jan).
+const DATA = CHART_DATA.messagesPerDay.records;   // [{p, y, d, n}]
+
+// ---------------------------------------------------------------------------
+// Colour: per-person sequential ramps (light low count -> dark high count),
+// built in CIE-LUV so equal darkness means equal counts. The ramp params
+// (hue, luminance track, chroma) live in chart_config.js as mumScale/dadScale;
+// CHART_RAMPS just applies chartRamp() to them, so both parents' max-count ends
+// stay equally dark and any recolour happens in one place.
+// ---------------------------------------------------------------------------
+const RAMP = Object.fromEntries(CHART_DATA.people.map(p => [p.label, chartRamp(C[p.key + "Scale"])]));
+const CAP = CHART_DATA.messagesPerDay.cap;   // counts above this are clipped
+
+// ---------------------------------------------------------------------------
+// Canvas geometry: 16:9 with 15% whitespace padding on every side.
+// ---------------------------------------------------------------------------
+const W = 1920, H = 1080;
+const M = 90;          // equal margin on all four sides
+const inner = { x: M, y: M, w: W - 2*M, h: H - 2*M };
+
+const titleH   = 86;    // top band: title on the left, legend just to its right
+const monthH   = 52;    // month labels + boundary ticks under the calendar
+const yearLabW = 78;    // year labels down the left
+const legendW  = 250;   // colour-ramp gradient bar width
+
+const cal = {
+  x: inner.x + yearLabW,
+  y: inner.y + titleH,
+  w: inner.w - yearLabW,
+  h: inner.h - titleH - monthH,
+};
+
+const svg = d3.select("#chart");
+
+// ---- Thin outline of the full 16:9 canvas (frame reference) ----------------
+svg.append("rect")
+  .attr("x", 1).attr("y", 1).attr("width", W - 2).attr("height", H - 2)
+  .attr("fill", "none").attr("stroke", C.frame).attr("stroke-width", 2);
+
+// ---- Scales ---------------------------------------------------------------
+// x: day-of-year (leap ref). 366 columns span the calendar width.
+const x = d3.scaleLinear().domain([0, 366]).range([cal.x, cal.x + cal.w]);
+const tileW = cal.w / 366;
+
+// y: years 2007..2026, 2007 at top. 0.24 offsets put Mum above / Dad below the
+// year centre; tiles are 0.48 tall (two strips meet at the year line).
+const YEARS = d3.range(CHART_DATA.messagesPerDay.yearMin, CHART_DATA.messagesPerDay.yearMax + 1);
+// Tight top/bottom padding so 2007 sits right at the top margin (just enough to
+// not clip the outer strips, which reach ±0.42 from each year line).
+const yyear = d3.scaleLinear().domain([YEARS[0] - 0.5, YEARS[YEARS.length - 1] + 0.5]).range([cal.y, cal.y + cal.h]);
+// Two strips per year meeting at the year line; offset < 0.25 opens a small gap
+// BETWEEN consecutive years so each year reads as an individual pair.
+const yOff  = 0.21;
+const tileH = Math.abs(yyear(2 * yOff) - yyear(0));
+
+// ---- Title (flush-left) ---------------------------------------------------
+svg.append("text")
+  .attr("x", inner.x).attr("y", inner.y + 50)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink)
+  .text("Messages per day");
+
+// ---- Year labels (left) ---------------------------------------------------
+// Tabular figures so every 4-digit year is the same width — right-aligned AND
+// flush on the left, instead of jagged from proportional digit widths.
+svg.selectAll(".yearlab").data(YEARS).join("text")
+  .attr("x", cal.x - 16).attr("y", d => yyear(d) + 9)
+  .attr("text-anchor", "end").attr("font-size", 26)
+  .attr("font-weight", 400).attr("fill", C.muted)
+  .style("font-variant-numeric", "tabular-nums")
+  .style("font-feature-settings", "'tnum' 1")
+  .style("letter-spacing", "-1px")
+  .text(d => d);
+
+// ---- Day tiles ------------------------------------------------------------
+svg.selectAll(".cell").data(DATA).join("rect")
+  .attr("x", d => x(d.d))
+  .attr("width", Math.ceil(tileW) + 0.5)
+  .attr("y", d => yyear(d.y + (d.p === CHART_DATA.people[0].label ? -yOff : yOff)) - tileH / 2)
+  .attr("height", tileH)
+  .attr("fill", d => RAMP[d.p](Math.min(d.n, CAP) / CAP));
+
+// ---- Month axis (bottom): every month labelled, ticks at the boundaries -----
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const doyOf = m => (Date.UTC(2000, m, 1) - Date.UTC(2000, 0, 1)) / 86400000;
+// 13 boundaries: start of each month, plus the end of Dec (day 366).
+const bounds = d3.range(13).map(m => (m < 12 ? doyOf(m) : 366));
+const axisY = cal.y + cal.h;
+
+// Black baseline along the x-axis (matches the coverage chart).
+svg.append("line")
+  .attr("x1", x(0)).attr("x2", x(366))
+  .attr("y1", axisY).attr("y2", axisY)
+  .attr("stroke", C.ink).attr("stroke-width", 2.5);
+
+// Black tick marks at each month boundary.
+svg.selectAll(".monthtick").data(bounds).join("line")
+  .attr("x1", d => x(d)).attr("x2", d => x(d))
+  .attr("y1", axisY).attr("y2", axisY + 8)
+  .attr("stroke", C.ink).attr("stroke-width", 2);
+
+// Month names centred within each month's span.
+svg.selectAll(".monthlab").data(MONTHS).join("text")
+  .attr("x", (_, i) => (x(bounds[i]) + x(bounds[i + 1])) / 2)
+  .attr("y", axisY + 36)
+  .attr("text-anchor", "middle").attr("font-size", 26)
+  .attr("font-weight", 400).attr("fill", C.muted)
+  .text(d => d);
+
+// ---- Colour-ramp legend: top-right corner ----------------------------------
+const barW = legendW, barH = 22, gapY = 12;
+const legX = inner.x + inner.w - legendW;
+const legTop = inner.y + 8;      // top-aligned with the title
+const lx = d3.scaleLinear().domain([0, CAP]).range([legX, legX + barW]);
+
+function legendBar(person, topY, showTicks) {
+  const g = svg.append("g");
+  const N = 120;
+  g.selectAll("rect").data(d3.range(N)).join("rect")
+    .attr("x", i => legX + (barW * i / N))
+    .attr("width", barW / N + 0.6)
+    .attr("y", topY).attr("height", barH)
+    .attr("fill", i => RAMP[person]((i / (N - 1))));
+  g.append("text")
+    .attr("x", legX - 28).attr("y", topY + barH - 4)
+    .attr("text-anchor", "end").attr("font-size", 26)
+    .attr("font-weight", 500).attr("fill", C.ink).text(person);
+  if (showTicks) {
+    // Endpoint numbers only, centred on each end of the bar (no tick marks).
+    // Daily counts at/above CAP share the darkest colour, hence "CAP+".
+    [{ v: 0, label: "0" }, { v: CAP, label: CAP + "+" }].forEach(({ v, label }) => {
+      g.append("text")
+        .attr("x", lx(v)).attr("y", topY + barH + 26)
+        .attr("text-anchor", "middle").attr("font-size", 22)
+        .attr("font-weight", 400).attr("fill", C.muted).text(label);
+    });
+  }
+}
+CHART_DATA.people.forEach((p, i) =>
+  legendBar(p.label, legTop + i * (barH + gapY), i === CHART_DATA.people.length - 1));
+</script>
+</body>
+</html>

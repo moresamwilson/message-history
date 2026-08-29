@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Messages sent/received (total)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  /* 16:9 stage (1920×1080 design frame) */
+  #stage {
+    position: relative;
+    width: 100vw;
+    aspect-ratio: 16 / 9;
+    background: #ffffff;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+const C = CHART_COLORS;
+// Data: measured counts only (no modelling), both people combined.
+const DATA = [
+  { direction: "Sent",     value: CHART_DATA.messagesTotal.sent },
+  { direction: "Received", value: CHART_DATA.messagesTotal.received },
+];
+
+// Neutral grey — undifferentiated by person.
+const BAR = C.self;
+
+// ---------------------------------------------------------------------------
+// Canvas geometry: 16:9 with 15% whitespace padding on every side.
+// ---------------------------------------------------------------------------
+const W = 1920, H = 1080;
+const M = 90;          // equal margin on all four sides
+const inner = { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
+
+// Sub-layout within the inner region: title → plot → group labels.
+const titleH  = 150;   // title + subtitle block
+const xAxisH  = 56;    // group labels under the bars
+const yAxisW  = 78;    // left gutter for the y-axis numbers (keeps them inside)
+const plot = {
+  x: inner.x + yAxisW,
+  y: inner.y + titleH,
+  w: inner.w - yAxisW,
+  h: inner.h - titleH - xAxisH,
+};
+
+const svg = d3.select("#chart");
+
+// ---- Thin outline of the full 16:9 canvas (frame reference) ----------------
+svg.append("rect")
+  .attr("x", 1).attr("y", 1).attr("width", W - 2).attr("height", H - 2)
+  .attr("fill", "none").attr("stroke", C.frame).attr("stroke-width", 2);
+
+// ---- Scales ---------------------------------------------------------------
+const x0 = d3.scaleBand()
+  .domain(DATA.map(d => d.direction))
+  .range([plot.x, plot.x + plot.w])
+  .paddingInner(0.40)
+  .paddingOuter(0.18);
+
+// One bar per group, kept the same width as a single bar in the Mum/Dad chart
+// so the two charts read consistently side by side.
+const barW = x0.bandwidth() * 0.42;
+
+// Ceiling shared with the by-parent chart so the two sit on the same scale.
+const y = d3.scaleLinear()
+  .domain([0, CHART_DATA.barScale.max])
+  .range([plot.y + plot.h, plot.y]);
+
+// ---- Y gridlines + ticks --------------------------------------------------
+const yTicks = d3.range(0, CHART_DATA.barScale.max + 1, CHART_DATA.barScale.step);
+const gGrid = svg.append("g");
+gGrid.selectAll("line").data(yTicks).join("line")
+  .attr("x1", plot.x).attr("x2", plot.x + plot.w)
+  .attr("y1", d => y(d)).attr("y2", d => y(d))
+  .attr("stroke", C.grid).attr("stroke-width", d => d === 0 ? 0 : 1);
+
+const yLabels = gGrid.selectAll("text").data(yTicks).join("text")
+  .attr("x", plot.x - 18).attr("y", d => y(d) + 8)
+  .attr("text-anchor", "end").attr("font-size", 26)
+  .attr("font-weight", 400).attr("fill", C.muted)
+  .text(d => d3.format(",")(d));
+
+// Left edge of the y-axis numbers — the title aligns flush to this.
+const labelLeft = d3.min(yLabels.nodes(), n => n.getBBox().x);
+
+// ---- Title & subtitle (flush-left with the y-axis numbers) ----------------
+svg.append("text")
+  .attr("x", labelLeft).attr("y", inner.y + 46)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink)
+  .text("Total messages");
+
+svg.append("text")
+  .attr("x", labelLeft).attr("y", inner.y + 96)
+  .attr("font-size", 28).attr("font-weight", 500).attr("fill", C.muted)
+  .text(`Raw message data (${CHART_DATA.yearRange})`);
+
+// ---- Bars (one centred bar per group) -------------------------------------
+svg.selectAll(".bar").data(DATA).join("rect")
+  .attr("x", d => x0(d.direction) + (x0.bandwidth() - barW) / 2)
+  .attr("width", barW)
+  .attr("y", d => y(d.value))
+  .attr("height", d => y(0) - y(d.value))
+  .attr("fill", BAR);
+
+// ---- Value label — white, inside each bar near the top ---------------------
+svg.selectAll(".barval").data(DATA).join("text")
+  .attr("x", d => x0(d.direction) + x0.bandwidth() / 2)
+  .attr("y", d => y(d.value) + 54)
+  .attr("text-anchor", "middle")
+  .attr("font-size", 26).attr("font-weight", 700).attr("fill", C.background)
+  .text(d => d3.format(",")(d.value));
+
+// ---- Solid black zero baseline — drawn AFTER the bars so it sits on top ----
+svg.append("line")
+  .attr("x1", plot.x).attr("x2", plot.x + plot.w)
+  .attr("y1", y(0)).attr("y2", y(0))
+  .attr("stroke", C.ink).attr("stroke-width", 2.5);
+
+// ---- Group labels under the bars (Sent / Received) ------------------------
+svg.selectAll(".grouplab").data(DATA).join("text")
+  .attr("x", d => x0(d.direction) + x0.bandwidth() / 2)
+  .attr("y", plot.y + plot.h + 46)
+  .attr("text-anchor", "middle")
+  .attr("font-size", 26).attr("font-weight", 400).attr("fill", C.muted)
+  .text(d => d.direction);
+</script>
+</body>
+</html>

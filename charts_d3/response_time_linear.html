@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Response time (linear)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #stage { position: relative; width: 100vw; aspect-ratio: 16 / 9; background: #ffffff;
+           font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+// Data: reply-time densities. A "reply" is a direction flip (message, then
+// the next one back) within 24 h; longer gaps count as new conversations.
+// Gaussian kernel densities, area-normalised, on a linear time axis: replies bunch up hard against zero.
+const DATA = CHART_DATA.responseTimeLinear;
+
+// ---- Palette (shared config) — colour = the parent; my replies are grey -----
+const C = CHART_COLORS;
+const PERSON = Object.fromEntries(CHART_DATA.people.map(p => [p.label, C[p.key]]));
+const GREY = C.self;
+const colourFor = (person, who) => (who === "me" ? GREY : PERSON[person]);
+
+// ---- Canvas geometry: 16:9 with equal margins -----------------------------
+const W = 1920, H = 1080, M = 90;
+const inner = { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
+const svg = d3.select("#chart");
+svg.append("rect").attr("x", 1).attr("y", 1).attr("width", W - 2).attr("height", H - 2)
+  .attr("fill", "none").attr("stroke", C.frame).attr("stroke-width", 2);
+
+// ---- Sub-layout: title block -> two stacked facets -> x-axis ----------------
+const titleH = 184, xLabelH = 64, panelGap = 64;
+const plot = { x: inner.x, y: inner.y + titleH, w: inner.w, h: inner.h - titleH - xLabelH };
+const panelH = (plot.h - panelGap) / 2;
+
+// Shared scales — both facets fixed, so curve heights are directly comparable.
+// (The log chart stores already-log10'd x coordinates, so x is linear either way.)
+const x = d3.scaleLinear().domain(DATA.xdomain).range([plot.x, plot.x + plot.w]);
+const y = d3.scaleLinear().domain([0, DATA.ymax * 1.05]);   // .range set per panel
+
+svg.append("defs").append("clipPath").attr("id", "plotclip")
+  .append("rect").attr("x", plot.x).attr("y", plot.y).attr("width", plot.w).attr("height", plot.h);
+
+// ---- Title & subtitle ------------------------------------------------------
+svg.append("text").attr("x", plot.x).attr("y", inner.y + 46)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink).text("Response time");
+svg.append("text").attr("x", plot.x).attr("y", inner.y + 96)
+  .attr("font-size", 28).attr("font-weight", 500).attr("fill", C.muted).text("Distribution of every message (linear scale)");
+
+// ---- Legend (top-right, built right-to-left) --------------------------------
+const legend = svg.append("g");
+const legItems = [
+  { label: "I reply", color: GREY },
+  ...CHART_DATA.people.map(p => ({ label: `${p.label} replies`, color: PERSON[p.label] })),
+];
+const legBaseY = inner.y + 40, sw = 26, swGap = 12, itemGap = 40;
+let cursor = inner.x + inner.w;
+legItems.slice().reverse().forEach(it => {
+  const t = legend.append("text")
+    .attr("font-size", 26).attr("font-weight", 500).attr("fill", C.ink).text(it.label);
+  const tw = t.node().getBBox().width;
+  const left = cursor - (sw + swGap + tw);
+  t.attr("x", left + sw + swGap).attr("y", legBaseY);
+  legend.append("rect").attr("x", left).attr("y", legBaseY - 22).attr("width", sw).attr("height", sw)
+    .attr("fill", it.color);
+  cursor = left - itemGap;
+});
+
+// ---- Draw one facet (parent) ------------------------------------------------
+const series = (panel, who) => DATA.x.map((xv, i) => ({ x: xv, v: panel[who].y[i] }));
+
+function drawPanel(person, top) {
+  const bottom = top + panelH;
+  y.range([bottom, top]);
+  const panel = DATA.panels[person];
+  const area = d3.area().x(d => x(d.x)).y0(y(0)).y1(d => y(d.v)).curve(d3.curveBasis);
+  const line = d3.line().x(d => x(d.x)).y(d => y(d.v)).curve(d3.curveBasis);
+
+  // faint vertical gridlines at each x tick, behind the curves
+  DATA.ticks.forEach(t => {
+    svg.append("line").attr("x1", x(t.v)).attr("x2", x(t.v)).attr("y1", top).attr("y2", bottom)
+      .attr("stroke", C.grid).attr("stroke-width", 1);
+  });
+
+  const g = svg.append("g").attr("clip-path", "url(#plotclip)");
+  ["me", "them"].forEach(who => {        // grey "me" first, coloured parent on top
+    g.append("path").datum(series(panel, who))
+      .attr("fill", colourFor(person, who)).attr("fill-opacity", 0.22).attr("d", area);
+  });
+  ["me", "them"].forEach(who => {
+    g.append("path").datum(series(panel, who))
+      .attr("fill", "none").attr("stroke", colourFor(person, who)).attr("stroke-width", 2.6).attr("d", line);
+  });
+
+  // solid baseline (zero density) on top
+  svg.append("line").attr("x1", plot.x).attr("x2", plot.x + plot.w).attr("y1", bottom).attr("y2", bottom)
+    .attr("stroke", C.ink).attr("stroke-width", 2.5);
+
+  // facet strip label, top-left above the panel
+  svg.append("text").attr("x", plot.x).attr("y", top - 12)
+    .attr("font-size", 26).attr("font-weight", 500).attr("fill", C.ink).text(person);
+}
+
+drawPanel(CHART_DATA.people[0].label, plot.y);
+drawPanel(CHART_DATA.people[1].label, plot.y + panelH + panelGap);
+
+// ---- Shared x-axis labels under the bottom facet (gridlines mark position) --
+const xBottom = plot.y + plot.h;
+DATA.ticks.forEach((t, i) => {
+  const anchor = i === 0 ? "start" : i === DATA.ticks.length - 1 ? "end" : "middle";
+  svg.append("text").attr("x", x(t.v)).attr("y", xBottom + 44)
+    .attr("text-anchor", anchor).attr("font-size", 26).attr("font-weight", 400)
+    .attr("fill", C.muted).text(t.label);
+});
+</script>
+</body>
+</html>

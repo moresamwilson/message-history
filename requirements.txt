@@ -1,0 +1,11 @@
+# Core pipeline
+numpy
+pandas
+
+# Sentiment scoring (script 6)
+vaderSentiment
+
+# Photo OCR of old phone screens (script 1c) — macOS only
+# pyobjc-framework-Vision
+# pyobjc-framework-Cocoa
+# Pillow

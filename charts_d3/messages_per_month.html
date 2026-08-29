@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Messages per month, including modelled</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #stage { position: relative; width: 100vw; aspect-ratio: 16 / 9; background: #ffffff;
+           font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+// Data: the completed monthly series — measured where the data survives,
+// modelled where it doesn't. The bold line and band are a 3-month centred
+// rolling mean; the faint line is the raw monthly estimate. Observed months
+// have a zero-width interval, so the band self-documents: wide where
+// modelled, collapsed to nothing where measured.
+// Rows: [period, raw, smoothed, lo95_s, hi95_s, observed]
+const C = CHART_COLORS;
+const PERSON = Object.fromEntries(CHART_DATA.people.map(p => [p.label, C[p.key]]));
+const ROWS = CHART_DATA.messagesPerMonth.series;
+
+// Column indices into each row.
+const P = 0, RAW = 1, SM = 2, LO = 3, HI = 4;
+
+const parse = d3.utcParse("%Y-%m");
+const rows = person => ROWS[person].map(r => ({
+  date: parse(r[P]), raw: r[RAW], sm: r[SM], lo: r[LO], hi: r[HI],
+}));
+
+// ---- Canvas geometry: 16:9 with equal margins -----------------------------
+const W = 1920, H = 1080, M = 90;
+const inner = { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
+const svg = d3.select("#chart");
+svg.append("rect").attr("x", 1).attr("y", 1).attr("width", W - 2).attr("height", H - 2)
+  .attr("fill", "none").attr("stroke", C.frame).attr("stroke-width", 2);
+
+// ---- Sub-layout: title block -> two stacked facets -> x-axis ----------------
+// panelGap is generous so the lower facet's labels clear the upper facet's
+// zero baseline.
+const titleH = 184, xLabelH = 64, panelGap = 110, yAxisW = 78;
+const plot = {
+  x: inner.x + yAxisW, y: inner.y + titleH,
+  w: inner.w - yAxisW, h: inner.h - titleH - xLabelH,
+};
+const panelH = (plot.h - panelGap) / 2;
+
+// Shared scales — both facets fixed, so Mum and Dad are directly comparable.
+const x = d3.scaleUtc()
+  .domain(CHART_DATA.messagesPerMonth.xdomain.map(parse))
+  .range([plot.x, plot.x + plot.w]);
+const y = d3.scaleLinear().domain([0, CHART_DATA.messagesPerMonth.yMax]);   // .range set per panel
+const yTicks = CHART_DATA.messagesPerMonth.yTicks;
+
+// ---- Title & subtitle (flush-left with the y-axis numbers) -----------------
+// Drawn after the y labels below so we can align to their left edge.
+
+// ---- Draw one facet (parent) -----------------------------------------------
+function drawPanel(person, top) {
+  const bottom = top + panelH;
+  y.range([bottom, top]);
+  const d = rows(person);
+  const col = PERSON[person];
+
+  // horizontal gridlines behind everything (zero handled by the baseline)
+  svg.append("g").selectAll("line").data(yTicks).join("line")
+    .attr("x1", plot.x).attr("x2", plot.x + plot.w)
+    .attr("y1", v => y(v)).attr("y2", v => y(v))
+    .attr("stroke", C.grid).attr("stroke-width", v => v === 0 ? 0 : 1);
+
+  // y tick numbers, right-aligned in the left gutter
+  svg.append("g").selectAll("text").data(yTicks).join("text")
+    .attr("class", "ylab")
+    .attr("x", plot.x - 18).attr("y", v => y(v) + 9)
+    .attr("text-anchor", "end").attr("font-size", 26).attr("font-weight", 400)
+    .attr("fill", C.muted).text(v => v);
+
+  // Clip to this facet so nothing can bleed into its neighbour.
+  const clipId = `clip-${person}`;
+  svg.append("defs").append("clipPath").attr("id", clipId)
+    .append("rect").attr("x", plot.x).attr("y", top).attr("width", plot.w).attr("height", panelH);
+  const g = svg.append("g").attr("clip-path", `url(#${clipId})`);
+
+  // 95% band — only where the smoothed edges exist (ends are null)
+  const band = d3.area()
+    .defined(r => r.lo !== null && r.hi !== null)
+    .x(r => x(r.date)).y0(r => y(r.lo)).y1(r => y(r.hi))
+    .curve(d3.curveMonotoneX);
+  g.append("path").datum(d)
+    .attr("fill", col).attr("fill-opacity", 0.18).attr("d", band);
+
+  // faint raw monthly estimate — honesty about the real texture
+  const rawLine = d3.line().x(r => x(r.date)).y(r => y(r.raw));
+  g.append("path").datum(d)
+    .attr("fill", "none").attr("stroke", col).attr("stroke-opacity", 0.30)
+    .attr("stroke-width", 1.2).attr("d", rawLine);
+
+  // bold smoothed trend
+  const smLine = d3.line()
+    .defined(r => r.sm !== null)
+    .x(r => x(r.date)).y(r => y(r.sm)).curve(d3.curveMonotoneX);
+  g.append("path").datum(d)
+    .attr("fill", "none").attr("stroke", col).attr("stroke-width", 3).attr("d", smLine);
+
+  // solid zero baseline on top
+  svg.append("line").attr("x1", plot.x).attr("x2", plot.x + plot.w)
+    .attr("y1", bottom).attr("y2", bottom)
+    .attr("stroke", C.ink).attr("stroke-width", 2.5);
+
+  // facet strip label, above the panel — x is set once labelLeft is known, so it
+  // hangs off the same left edge as the title and the y-axis numbers
+  svg.append("text").attr("class", "striplab").attr("y", top - 12)
+    .attr("font-size", 26).attr("font-weight", 500).attr("fill", C.ink).text(person);
+}
+
+drawPanel(CHART_DATA.people[0].label, plot.y);
+drawPanel(CHART_DATA.people[1].label, plot.y + panelH + panelGap);
+
+// ---- Legend (top-right) — explains the three marks, not the colours --------
+// Grey throughout: each mark means the same thing in both facets, so colouring
+// the glyphs Mum-red or Dad-blue would wrongly imply they belonged to a person.
+const legend = svg.append("g");
+const legItems = [
+  { label: "Monthly data",           mark: "thin"  },
+  { label: "3-month rolling average", mark: "thick" },
+  { label: "95% confidence interval", mark: "band"  },
+];
+// Stacked one per row, flush to the top-right corner: the glyphs share a single
+// column, so measure the widest label first and hang the block off that.
+const legBaseY = inner.y + 40, sw = 30, swGap = 10, rowGap = 36, legFont = 24;
+const legRight = inner.x + inner.w;
+
+const texts = legItems.map(it => legend.append("text")
+  .attr("font-size", legFont).attr("font-weight", 400).attr("fill", C.ink).text(it.label));
+const maxTw = d3.max(texts, t => t.node().getBBox().width);
+const glyphX = legRight - maxTw - swGap - sw;
+
+legItems.forEach((it, i) => {
+  const rowY = legBaseY + i * rowGap;
+  texts[i].attr("x", glyphX + sw + swGap).attr("y", rowY);
+  if (it.mark === "band") {
+    legend.append("rect")
+      .attr("x", glyphX).attr("y", rowY - 15).attr("width", sw).attr("height", 16)
+      .attr("fill", C.muted).attr("fill-opacity", 0.30);
+  } else {
+    legend.append("line")
+      .attr("x1", glyphX).attr("x2", glyphX + sw)
+      .attr("y1", rowY - 7).attr("y2", rowY - 7)
+      .attr("stroke", C.muted).attr("stroke-width", it.mark === "thick" ? 3 : 1.2);
+  }
+});
+
+// ---- Shared x-axis labels under the bottom facet ---------------------------
+const xBottom = plot.y + plot.h;
+const [xt0, xt1] = CHART_DATA.messagesPerMonth.xdomain.map(p => +p.slice(0, 4));
+const xTicks = d3.range(xt0 + 1, xt1 + 1, 2).map(yr => parse(`${yr}-01`));
+xTicks.forEach(t => {
+  svg.append("line").attr("x1", x(t)).attr("x2", x(t))
+    .attr("y1", xBottom).attr("y2", xBottom + 10)
+    .attr("stroke", C.ink).attr("stroke-width", 1.5);
+  svg.append("text").attr("x", x(t)).attr("y", xBottom + 44)
+    .attr("text-anchor", "middle").attr("font-size", 26).attr("font-weight", 400)
+    .attr("fill", C.muted).text(t.getUTCFullYear());
+});
+
+// Matching tick marks on Mum's zero line (top panel), hanging into the gap. No
+// year labels here — the labelled axis lives under the Dad panel only.
+const mumBottom = plot.y + panelH;
+xTicks.forEach(t => {
+  svg.append("line").attr("x1", x(t)).attr("x2", x(t))
+    .attr("y1", mumBottom).attr("y2", mumBottom + 10)
+    .attr("stroke", C.ink).attr("stroke-width", 1.5);
+});
+
+// ---- Title & subtitle — flush-left with the y-axis numbers ------------------
+const labelLeft = d3.min(svg.selectAll("text.ylab").nodes(), n => n.getBBox().x);
+svg.selectAll("text.striplab").attr("x", labelLeft);
+
+svg.append("text").attr("x", labelLeft).attr("y", inner.y + 46)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink)
+  .text("Messages exchanged per month");
+svg.append("text").attr("x", labelLeft).attr("y", inner.y + 96)
+  .attr("font-size", 28).attr("font-weight", 500).attr("fill", C.muted)
+  .text("Over my entire life, measured and modelled data");
+</script>
+</body>
+</html>

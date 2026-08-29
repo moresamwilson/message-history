@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Message timing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #stage { position: relative; width: 100vw; aspect-ratio: 16 / 9; background: #ffffff;
+           font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+const C = CHART_COLORS;
+// Data: hour-of-day × day-of-week counts per person, with LOESS-smoothed
+// marginal distributions. Measured messages only.
+const DATA = CHART_DATA.messageTiming;
+
+// ---- Colour: per-person ramps + solid colours from the shared config ----
+const RAMP = Object.fromEntries(CHART_DATA.people.map(p => [p.label, chartRamp(C[p.key + "Scale"])]));
+const COL  = Object.fromEntries(CHART_DATA.people.map(p => [p.label, C[p.key]]));
+
+// ---- Canvas geometry: 16:9, 7.5% padding -----------------------------------
+const W = 1920, H = 1080, M = 90;   // equal margin on all four sides
+const inner = { x: M, y: M, w: W - 2*M, h: H - 2*M };
+const svg = d3.select("#chart");
+
+// Thin canvas outline (frame reference).
+svg.append("rect").attr("x",1).attr("y",1).attr("width",W-2).attr("height",H-2)
+  .attr("fill","none").attr("stroke",C.frame).attr("stroke-width",2);
+
+// ---- Title (flush-left, same style as the other charts) --------------------
+svg.append("text").attr("x", inner.x).attr("y", inner.y + 46)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink)
+  .text("Message timing");
+
+// ---- Composite layout (one per person) -------------------------------------
+const compTop = inner.y + 76;   // leave room for the title above
+const gap = 74;
+const compW = (inner.w - gap) / 2;
+const dayGap = 16;                          // gap between the day labels and the heatmap
+// Size the day-label column to the widest left-side label (days + Mum/Dad) so the
+// right-aligned labels never spill past the margin — the widest sits flush with it.
+const leftLabels = [...DATA.days, ...CHART_DATA.people.map(p => p.label)];
+let maxLabelW = 0;
+{ const probe = svg.append("text").attr("font-size", 26).attr("font-weight", 500);
+  leftLabels.forEach(s => { probe.text(s); maxLabelW = Math.max(maxLabelW, probe.node().getBBox().width); });
+  probe.remove(); }
+const dayLabW = Math.ceil(maxLabelW) + dayGap;
+const rightGap = 10, rightMarginW = 84;
+const Wm = compW - dayLabW - rightGap - rightMarginW;   // heatmap width
+const Hm = inner.h - 366;                               // heatmap height (compressed to fit the title)
+const cellW = Wm / 24, cellH = Hm / 7;
+const topMarginH = 92;
+
+const HOURS = d3.range(24), DAYS = DATA.days;            // Mon..Sun, top->bottom
+const HOUR_TICKS = [6,12,18], HOUR_LABELS = ["06:00","12:00","18:00"];
+
+// shared scales (so both composites compare)
+function drawComposite(person, cx) {
+  const d = DATA[person];
+  const panelL = cx + dayLabW;
+  const heatTop = compTop + 50 + topMarginH + 6;
+  const heatBot = heatTop + Hm;
+  const ramp = RAMP[person], col = COL[person];
+
+  const xHour = d3.scaleLinear().domain([0,24]).range([panelL, panelL+Wm]);
+  const yRow  = i => heatTop + i*cellH;
+
+  // person label — right-aligned with the day labels, just above the heatmap top
+  svg.append("text").attr("x", panelL - dayGap).attr("y", heatTop - 36)
+    .attr("text-anchor", "end")
+    .attr("font-size", 26).attr("font-weight", 500).attr("fill", C.ink).text(person);
+
+  // ---- Heatmap cells ----
+  const cells = [];
+  for (let i=0;i<7;i++) for (let h=0;h<24;h++) cells.push({i,h,n:d.grid[i][h]});
+  svg.selectAll(null).data(cells).join("rect")
+    .attr("x", c => xHour(c.h)).attr("y", c => yRow(c.i))
+    .attr("width", cellW+0.5).attr("height", cellH+0.5)
+    .attr("fill", c => ramp(c.n / DATA.hmMax));
+
+  // day labels (left) — right-aligned; the widest sits flush with the margin/title
+  svg.selectAll(null).data(DAYS).join("text")
+    .attr("x", panelL - dayGap).attr("y", (_,i) => yRow(i) + cellH/2 + 7)
+    .attr("text-anchor","end").attr("font-size",26).attr("font-weight",400)
+    .attr("fill",C.muted).text(s => s);
+
+  // hour ticks + labels (below)
+  HOUR_TICKS.forEach((t,k) => {
+    const xx = xHour(t);
+    svg.append("line").attr("x1", xx).attr("x2", xx)
+      .attr("y1", heatBot).attr("y2", heatBot + 8)
+      .attr("stroke", C.muted).attr("stroke-width", 1.5);
+    svg.append("text").attr("x", xx).attr("y", heatBot + 36)
+      .attr("text-anchor", "middle")
+      .attr("font-size",26).attr("font-weight",400).attr("fill",C.muted)
+      .text(HOUR_LABELS[k]);
+  });
+
+  // ---- Top marginal: hour-of-day distribution ----
+  const yHour = d3.scaleLinear().domain([0, DATA.hourMax])
+    .range([compTop + 50 + topMarginH, compTop + 50]);
+  const hp = d.hourSmooth.map((v,h) => ({x: xHour(h+0.5), v}));
+  // anchor the area to the panel edges so it spans the full width
+  const hpts = [{x:panelL, v:d.hourSmooth[0]}, ...hp, {x:panelL+Wm, v:d.hourSmooth[23]}];
+  svg.append("path").datum(hpts)
+    .attr("fill", col).attr("opacity", 0.22)
+    .attr("d", d3.area().x(p=>p.x).y0(yHour(0)).y1(p=>yHour(p.v)).curve(d3.curveMonotoneX));
+  svg.append("path").datum(hpts)
+    .attr("fill","none").attr("stroke", col).attr("stroke-width", 2.6)
+    .attr("d", d3.line().x(p=>p.x).y(p=>yHour(p.v)).curve(d3.curveMonotoneX));
+
+  // ---- Right marginal: day-of-week distribution ----
+  const axisX = panelL + Wm + rightGap;
+  const xDow = d3.scaleLinear().domain([0, DATA.dowMax]).range([axisX, axisX + rightMarginW]);
+  const wpts = d.dowSmooth.map((v,i) => ({y: yRow(i)+cellH/2, v}));
+  svg.append("path").datum(wpts)
+    .attr("fill", col).attr("opacity", 0.22)
+    .attr("d", d3.area().y(p=>p.y).x0(axisX).x1(p=>xDow(p.v)).curve(d3.curveMonotoneY));
+  svg.append("path").datum(wpts)
+    .attr("fill","none").attr("stroke", col).attr("stroke-width", 2.6)
+    .attr("d", d3.line().x(p=>xDow(p.v)).y(p=>p.y).curve(d3.curveMonotoneY));
+
+  // ---- Colour-scale legend ("Messages"), centred under the heatmap ----
+  // Extra gap below the hour labels separates the legend from the chart.
+  // "Messages" label sits to the LEFT of the bar; the whole group is centred
+  // under the heatmap (label width measured so the centring is exact).
+  const cbW = 260, cbH = 24, cbY = heatBot + 80, labelGap = 34;
+  const legCx = panelL + Wm/2;
+  const lab = svg.append("text").attr("font-size",26).attr("font-weight",500)
+    .attr("fill",C.ink).text("Messages");
+  const labelW = lab.node().getBBox().width;
+  const groupL = legCx - (labelW + labelGap + cbW) / 2;
+  const cbX = groupL + labelW + labelGap;
+  const cbScale = d3.scaleLinear().domain([0, DATA.hmMax]).range([cbX, cbX + cbW]);
+  lab.attr("x", groupL).attr("y", cbY + cbH/2 + 9).attr("text-anchor","start");
+  const Nc = 130;
+  svg.selectAll(null).data(d3.range(Nc)).join("rect")
+    .attr("x", k => cbX + cbW*k/Nc).attr("width", cbW/Nc + 0.6)
+    .attr("y", cbY).attr("height", cbH)
+    .attr("fill", k => ramp(k/(Nc-1)));
+  // endpoint numbers only, centred on each end of the bar (no tick marks)
+  [0, DATA.hmMax].forEach(v => {
+    svg.append("text").attr("x", cbScale(v)).attr("y", cbY + cbH + 26)
+      .attr("text-anchor", "middle").attr("font-size", 22).attr("font-weight", 400).attr("fill", C.muted).text(v);
+  });
+}
+
+drawComposite(CHART_DATA.people[0].label, inner.x);
+drawComposite(CHART_DATA.people[1].label, inner.x + compW + gap);
+</script>
+</body>
+</html>

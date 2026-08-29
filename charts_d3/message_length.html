@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Message length</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #stage { position: relative; width: 100vw; aspect-ratio: 16 / 9; background: #ffffff;
+           font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+// Data: mean characters per message per year and person (both directions
+// pooled); year/person cells with too few messages carry no bar.
+const DATA = CHART_DATA.messageLength;
+
+// ---- Palette (shared config: colour encodes WHO — Mum red / Dad blue) -------
+const C = CHART_COLORS;
+const PEOPLE = CHART_DATA.people.map(p => p.label);
+const PERSON = Object.fromEntries(CHART_DATA.people.map(p => [p.label, C[p.key]]));
+
+// ---- Canvas geometry: 16:9 with equal 90px margins -------------------------
+const W = 1920, H = 1080, M = 90;
+const inner = { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
+
+const titleH = 150;    // title + subtitle block
+const xAxisH = 56;     // year labels under the plot
+const yAxisW = 78;     // left gutter for the y-axis numbers
+const plot = {
+  x: inner.x + yAxisW,
+  y: inner.y + titleH,
+  w: inner.w - yAxisW,
+  h: inner.h - titleH - xAxisH,
+};
+
+const svg = d3.select("#chart");
+
+// ---- Thin canvas outline (frame reference) ---------------------------------
+svg.append("rect").attr("x", 1).attr("y", 1).attr("width", W - 2).attr("height", H - 2)
+  .attr("fill", "none").attr("stroke", C.frame).attr("stroke-width", 2);
+
+// ---- Scales ----------------------------------------------------------------
+// Every year gets a band (gap years included, so they show as empty slots);
+// within each year, one bar per parent.
+const years = d3.range(DATA.yearMin, DATA.yearMax + 1);
+const x0 = d3.scaleBand().domain(years)
+  .range([plot.x, plot.x + plot.w]).paddingInner(0.34).paddingOuter(0.16);
+// The paired Mum/Dad bars touch (no inner gap), so they're nice and thick. The
+// vibration you'd otherwise get from saturated red (#BB5566) abutting saturated
+// deep blue (#004488) — chromostereopsis, a shimmering shared edge — is killed by
+// the white bar stroke below: the two strokes meet as a crisp thin white divider,
+// so the colours never actually touch. Keeps the fixed palette intact.
+const x1 = d3.scaleBand().domain(PEOPLE)
+  .range([0, x0.bandwidth()]).padding(0);
+
+const yMax = DATA.yMax, yStep = DATA.yStep;
+const y = d3.scaleLinear().domain([0, yMax]).range([plot.y + plot.h, plot.y]);
+
+// ---- Y gridlines + labels (unit on the top label only, gridline inset) ------
+const topTick = yMax;
+const yTicks = d3.range(0, topTick + 1, yStep);   // 0, 25, 50, 75, 100
+const numRight = plot.x - 18;                       // shared right edge of numbers
+const gGrid = svg.append("g");
+
+const yLabels = gGrid.selectAll("text.ynum").data(yTicks).join("text")
+  .attr("class", "ynum")
+  .attr("x", numRight).attr("y", d => y(d) + 8)
+  .attr("text-anchor", "end").attr("font-size", 26)
+  .attr("font-weight", 400).attr("fill", C.muted)
+  .text(d => d);
+
+const unit = gGrid.append("text")
+  .attr("x", numRight + 3).attr("y", y(topTick) + 8)
+  .attr("text-anchor", "start").attr("font-size", 26)
+  .attr("font-weight", 400).attr("fill", C.muted).text("characters");
+const uBox = unit.node().getBBox();
+const gridStartTop = Math.max(plot.x, uBox.x + uBox.width + 12);
+
+gGrid.selectAll("line").data(yTicks).join("line")
+  .attr("x1", d => d === topTick ? gridStartTop : plot.x).attr("x2", plot.x + plot.w)
+  .attr("y1", d => y(d)).attr("y2", d => y(d))
+  .attr("stroke", C.grid).attr("stroke-width", d => d === 0 ? 0 : 1);
+
+// Left edge of the numbers — the title aligns flush to this (as in charts 8 & 9).
+const labelLeft = d3.min(yLabels.nodes(), n => n.getBBox().x);
+
+// ---- Title & subtitle ------------------------------------------------------
+svg.append("text")
+  .attr("x", labelLeft).attr("y", inner.y + 46)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink)
+  .text("Message length");
+
+svg.append("text")
+  .attr("x", labelLeft).attr("y", inner.y + 96)
+  .attr("font-size", 28).attr("font-weight", 500).attr("fill", C.muted)
+  .text("Mean per year");
+
+// ---- Legend (top-right, built right-to-left; matches the sibling charts) ----
+const legend = svg.append("g");
+const legItems = CHART_DATA.people.map(p => ({ label: p.label, color: C[p.key] }));
+const legBaseY = inner.y + 40, sw = 26, swGap = 12, itemGap = 40;
+let cursor = inner.x + inner.w;
+legItems.slice().reverse().forEach(it => {
+  const t = legend.append("text")
+    .attr("font-size", 26).attr("font-weight", 500).attr("fill", C.ink).text(it.label);
+  const tw = t.node().getBBox().width;
+  const left = cursor - (sw + swGap + tw);
+  t.attr("x", left + sw + swGap).attr("y", legBaseY);
+  legend.append("rect").attr("x", left).attr("y", legBaseY - 22)
+    .attr("width", sw).attr("height", sw).attr("fill", it.color);
+  cursor = left - itemGap;
+});
+
+// ---- Grouped bars: two per year (Mum, Dad); gap years stay empty -----------
+const byYear = {};
+PEOPLE.forEach(p => DATA.series[p].forEach(d => { (byYear[d.year] ||= {})[p] = d.v; }));
+
+years.forEach(yr => {
+  PEOPLE.forEach(p => {
+    const v = byYear[yr] && byYear[yr][p];
+    if (v == null) return;
+    svg.append("rect")
+      .attr("x", x0(yr) + x1(p)).attr("width", x1.bandwidth())
+      .attr("y", y(v)).attr("height", y(0) - y(v))
+      .attr("fill", PERSON[p])
+      .attr("stroke", C.background).attr("stroke-width", 2);
+  });
+});
+
+// ---- Solid black zero baseline — drawn after the lines so it sits on top ----
+svg.append("line")
+  .attr("x1", plot.x).attr("x2", plot.x + plot.w)
+  .attr("y1", y(0)).attr("y2", y(0))
+  .attr("stroke", C.ink).attr("stroke-width", 2.5);
+
+// ---- X axis: tick + year label centred under each year group ---------------
+years.forEach(yr => {
+  const xx = x0(yr) + x0.bandwidth() / 2;   // centre between the Mum & Dad bars
+  svg.append("line").attr("x1", xx).attr("x2", xx)
+    .attr("y1", y(0)).attr("y2", y(0) + 8)
+    .attr("stroke", C.ink).attr("stroke-width", 2);
+  svg.append("text")
+    .attr("x", xx).attr("y", y(0) + 44)
+    .attr("text-anchor", "middle").attr("font-size", 26).attr("font-weight", 400)
+    .attr("fill", C.muted).text(yr);
+});
+</script>
+</body>
+</html>

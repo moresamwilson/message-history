@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Total messages by parent (modelled)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="chart_config.js"></script>
+<script src="chart_data.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #stage { position: relative; width: 100vw; aspect-ratio: 16 / 9; background: #ffffff;
+           font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+  svg { display: block; width: 100%; height: 100%; }
+  text { font-family: "Inter", sans-serif; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="chart" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"></svg>
+</div>
+
+<script>
+// Data: modelled lifetime totals per person — posterior median + 95% interval.
+// Bars split by shade: the solid lower segment is the measured count, the pale
+// cap is the modelled remainder; the bar top sits at the median so it agrees
+// with the whiskers.
+const C = CHART_COLORS;
+const DATA = CHART_DATA.totalByParent.bars.map(d => ({ ...d, color: C[d.key] }));
+// Pale tint = modelled.
+const tint = c => d3.interpolateRgb(c, C.background)(0.5);
+
+// The 95% intervals are asymmetric; the label shows a single rounded ± of
+// the half-width, which reads more cleanly.
+const pm = d => Math.round(((d.hi - d.lo) / 2) / 10) * 10;
+
+// ---- Canvas geometry: 16:9 with equal 90px margins -------------------------
+const W = 1920, H = 1080, M = 90;
+const inner = { x: M, y: M, w: W - 2 * M, h: H - 2 * M };
+
+const titleH = 150;    // title + subtitle block
+const xAxisH = 56;     // parent labels under the bars
+const yAxisW = 88;     // left gutter for the y-axis numbers (fits "6,000")
+const plot = {
+  x: inner.x + yAxisW,
+  y: inner.y + titleH,
+  w: inner.w - yAxisW,
+  h: inner.h - titleH - xAxisH,
+};
+
+const svg = d3.select("#chart");
+svg.append("rect").attr("x", 1).attr("y", 1).attr("width", W - 2).attr("height", H - 2)
+  .attr("fill", "none").attr("stroke", C.frame).attr("stroke-width", 2);
+
+// ---- Scales ---------------------------------------------------------------
+const x0 = d3.scaleBand().domain(DATA.map(d => d.person))
+  .range([plot.x, plot.x + plot.w]).paddingInner(0.40).paddingOuter(0.18);
+const barW = x0.bandwidth() * 0.42;   // same bar width as the totals chart
+
+const y = d3.scaleLinear().domain([0, CHART_DATA.totalByParent.yMax]).range([plot.y + plot.h, plot.y]);
+
+// ---- Y gridlines + ticks --------------------------------------------------
+const yTicks = CHART_DATA.totalByParent.yTicks;   // zero is carried by the baseline
+const gGrid = svg.append("g");
+gGrid.selectAll("line").data(yTicks).join("line")
+  .attr("x1", plot.x).attr("x2", plot.x + plot.w)
+  .attr("y1", d => y(d)).attr("y2", d => y(d))
+  .attr("stroke", C.grid).attr("stroke-width", 1);
+
+const yLabels = gGrid.selectAll("text").data(yTicks).join("text")
+  .attr("x", plot.x - 18).attr("y", d => y(d) + 8)
+  .attr("text-anchor", "end").attr("font-size", 26)
+  .attr("font-weight", 400).attr("fill", C.muted)
+  .text(d => d3.format(",")(d));
+
+const labelLeft = d3.min(yLabels.nodes(), n => n.getBBox().x);
+
+// ---- Title & subtitle ------------------------------------------------------
+svg.append("text")
+  .attr("x", labelLeft).attr("y", inner.y + 46)
+  .attr("font-size", 52).attr("font-weight", 600).attr("fill", C.ink)
+  .text("Messages exchanged");
+
+svg.append("text")
+  .attr("x", labelLeft).attr("y", inner.y + 96)
+  .attr("font-size", 28).attr("font-weight", 500).attr("fill", C.muted)
+  .text("Over my entire life, measured and modelled data (95% confidence interval)");
+
+// ---- Bars — solid measured base, pale modelled cap --------------------------
+const barX = d => x0(d.person) + (x0.bandwidth() - barW) / 2;
+
+svg.selectAll(".bar-measured").data(DATA).join("rect")
+  .attr("x", barX).attr("width", barW)
+  .attr("y", d => y(d.measured))
+  .attr("height", d => y(0) - y(d.measured))
+  .attr("fill", d => d.color);
+
+svg.selectAll(".bar-modelled").data(DATA).join("rect")
+  .attr("x", barX).attr("width", barW)
+  .attr("y", d => y(d.value))
+  .attr("height", d => y(d.measured) - y(d.value))
+  .attr("fill", d => tint(d.color));
+
+// ---- Value label — above the whisker, with the rounded ± range -------------
+svg.selectAll(".barval").data(DATA).join("text")
+  .attr("x", d => x0(d.person) + x0.bandwidth() / 2)
+  .attr("y", d => y(d.hi) - 40)
+  .attr("text-anchor", "middle")
+  .attr("font-size", 30).attr("font-weight", 400).attr("fill", C.ink)
+  .text(d => `${d3.format(",")(d.value)} ± ${pm(d)}`);
+
+// ---- Legend (top-right) — the shade split, stacked ------------------------
+// Neutral grey swatches: light = modelled (top), dark = measured (bottom). Grey
+// (not Mum-red / Dad-blue) because the light/dark convention means the same on
+// both bars; the swatch shows the shade relationship, not a person.
+const legRows = [
+  { text: "Modelled", color: tint(C.muted) },   // lighter grey
+  { text: "Measured", color: C.muted },          // darker grey
+];
+const legRight = inner.x + inner.w, lsw = 26, lgap = 12, lrow = 40, legTop = inner.y + 40;
+legRows.forEach((r, i) => {
+  const by = legTop + i * lrow;
+  const t = svg.append("text")
+    .attr("x", legRight).attr("y", by)
+    .attr("text-anchor", "end").attr("font-size", 26).attr("font-weight", 500)
+    .attr("fill", C.ink).text(r.text);
+  const tw = t.node().getBBox().width;
+  svg.append("rect")
+    .attr("x", legRight - tw - lgap - lsw).attr("y", by - 22)
+    .attr("width", lsw).attr("height", lsw).attr("fill", r.color);
+});
+
+// ---- 95% interval whiskers (drawn over the bars) ---------------------------
+const capW = barW * 0.18;
+DATA.forEach(d => {
+  const cx = x0(d.person) + x0.bandwidth() / 2;
+  svg.append("line").attr("x1", cx).attr("x2", cx)
+    .attr("y1", y(d.lo)).attr("y2", y(d.hi))
+    .attr("stroke", C.ink).attr("stroke-width", 2.5);
+  [d.lo, d.hi].forEach(v => {
+    svg.append("line").attr("x1", cx - capW).attr("x2", cx + capW)
+      .attr("y1", y(v)).attr("y2", y(v))
+      .attr("stroke", C.ink).attr("stroke-width", 2.5);
+  });
+});
+
+// ---- Solid black zero baseline — drawn last so it sits on top --------------
+svg.append("line")
+  .attr("x1", plot.x).attr("x2", plot.x + plot.w)
+  .attr("y1", y(0)).attr("y2", y(0))
+  .attr("stroke", C.ink).attr("stroke-width", 2.5);
+
+// ---- Parent labels under the bars ------------------------------------------
+svg.selectAll(".grouplab").data(DATA).join("text")
+  .attr("x", d => x0(d.person) + x0.bandwidth() / 2)
+  .attr("y", plot.y + plot.h + 46)
+  .attr("text-anchor", "middle")
+  .attr("font-size", 26).attr("font-weight", 400).attr("fill", C.muted)
+  .text(d => d.person);
+</script>
+</body>
+</html>
